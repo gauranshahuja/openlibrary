@@ -183,6 +183,66 @@ class TestGoodReadsImport:
         assert books_wo_isbns == self.expected_books_wo_isbns
 
 
+class TestProcessIsbnListCsv:
+    """account.process_isbn_list_csv(): plain ISBN lists and CSVs with an isbn column."""
+
+    @staticmethod
+    def run(text):
+        return account.process_isbn_list_csv(web.storage({"csv": text}))
+
+    def test_plain_list_one_isbn_per_line(self):
+        books, books_wo_isbns = self.run("978-0-306-40615-7\n0306406152\n\n")
+        assert list(books) == ["9780306406157", "0306406152"]
+        assert books["9780306406157"] == {
+            "ISBN": "9780306406157",
+            "Title": "",
+            "My Rating": "0",
+            "Exclusive Shelf": "to-read",
+            "Date Read": "",
+        }
+        assert books_wo_isbns == {}
+
+    def test_csv_with_header_and_optional_columns(self):
+        text = "ISBN,Title,Shelf,Rating,Date_Read\n9780306406157,A Book,read,4,2024-03-09\n0306406152,,currently-reading,,\n"
+        books, _ = self.run(text)
+        assert books["9780306406157"] == {
+            "ISBN": "9780306406157",
+            "Title": "A Book",
+            "My Rating": "4",
+            "Exclusive Shelf": "read",
+            "Date Read": "2024/03/09",
+        }
+        assert books["0306406152"]["Exclusive Shelf"] == "currently-reading"
+        assert books["0306406152"]["My Rating"] == "0"
+
+    def test_bad_isbns_go_to_the_second_dict(self):
+        books, books_wo_isbns = self.run("isbn\n9780306406158\nbanana\n9780306406157\n")
+        assert list(books) == ["9780306406157"]
+        assert books_wo_isbns["row-1"]["ISBN"] == "9780306406158"
+        assert books_wo_isbns["row-2"]["ISBN"] == "banana"
+
+    def test_out_of_range_rating_and_bad_date_are_dropped(self):
+        books, _ = self.run("isbn,rating,date_read\n9780306406157,9,09/03/2024\n")
+        assert books["9780306406157"]["My Rating"] == "0"
+        assert books["9780306406157"]["Date Read"] == ""
+
+    def test_unknown_shelf_is_kept_so_the_page_reports_it(self):
+        books, _ = self.run("isbn,shelf\n9780306406157,favourites\n")
+        assert books["9780306406157"]["Exclusive Shelf"] == "favourites"
+
+    def test_duplicate_isbn_keeps_the_last_row(self):
+        books, _ = self.run("isbn,shelf\n9780306406157,read\n978-0306406157,to-read\n")
+        assert len(books) == 1
+        assert books["9780306406157"]["Exclusive Shelf"] == "to-read"
+
+    def test_bom_and_bytes(self):
+        books, _ = self.run("\ufeffisbn\n9780306406157\n".encode())
+        assert list(books) == ["9780306406157"]
+
+    def test_empty_file(self):
+        assert self.run("") == ({}, {})
+
+
 # --- account_verify.GET ---
 
 

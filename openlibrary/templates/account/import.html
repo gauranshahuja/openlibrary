@@ -42,6 +42,22 @@ $def with (books=None, books_wo_isbns=None)
         </div>
       </div>
 
+      <div class="data-transfer-card data-transfer-card--primary">
+        <div class="data-transfer-card-header">
+          <h3 class="data-transfer-card-title">$_("Import a list of ISBNs")</h3>
+        </div>
+        <p class="data-transfer-meta">$_("Format: .csv or .txt")</p>
+        <p>$_("One ISBN per line, or a CSV with an isbn column. Optional columns: title, shelf (want-to-read, currently-reading or read), rating (1-5) and date_read (YYYY-MM-DD).")</p>
+        <form method="POST" action="/account/import/isbn-list" enctype="multipart/form-data" id="isbn-list-import-form">
+          <input type="file" name="csv" id="isbn-list-input" accept=".csv,.txt,text/csv,text/plain" aria-label="$_('Choose a file with ISBNs')" required />
+          <div class="data-transfer-card__footer">
+            <button type="submit" class="cta-btn cta-btn--available" data-ol-link-track="PatronImports|IsbnList">
+              $_('Load Books')
+            </button>
+          </div>
+        </form>
+      </div>
+
       $# ========================================================================
       $# FOLLOW-UP: Barcode Scanner placement & metrics
       $# ------------------------------------------------------------------------

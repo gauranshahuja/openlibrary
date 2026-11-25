@@ -53,6 +53,7 @@ from openlibrary.plugins.upstream import forms
 from openlibrary.plugins.upstream.mybooks import MyBooksTemplate
 from openlibrary.plugins.upstream.utils import is_safe_redirect
 from openlibrary.utils.dateutil import elapsed_time
+from openlibrary.utils.isbn import check_digit_13, isbn_10_to_isbn_13, normalize_isbn
 from openlibrary.utils.request_context import site
 
 if TYPE_CHECKING:
@@ -917,6 +918,18 @@ class fetch_goodreads(delegate.page):
         return render["account/import"](books, books_wo_isbns)
 
 
+class import_isbn_list(delegate.page):
+    path = "/account/import/isbn-list"
+
+    def GET(self):
+        raise web.seeother("/account/import")
+
+    @require_login
+    def POST(self):
+        books, books_wo_isbns = process_isbn_list_csv(web.input(csv={}))
+        return render["account/import"](books, books_wo_isbns)
+
+
 class PatronExportException(Exception):
     pass
 
@@ -1508,6 +1521,88 @@ def process_goodreads_csv(i):
             books[isbn_13]["ISBN"] = isbn_13
         else:
             books_wo_isbns[_book["Book Id"]] = _book
+    return books, books_wo_isbns
+
+
+# Shelf names a patron may write in an ISBN-list CSV, mapped to the Goodreads
+# shelf names that goodreads_import.js already understands.
+ISBN_LIST_SHELVES: Final = {
+    "want-to-read": "to-read",
+    "to-read": "to-read",
+    "currently-reading": "currently-reading",
+    "read": "read",
+}
+
+
+def valid_isbn(raw: str) -> str | None:
+    """Return raw as a canonical ISBN 10 or 13, or None if its check digit is wrong.
+
+    >>> valid_isbn("978-0-306-40615-7")
+    '9780306406157'
+    >>> valid_isbn("0-306-40615-2")
+    '0306406152'
+    >>> valid_isbn("9780306406158") is None
+    True
+    >>> valid_isbn("banana") is None
+    True
+    """
+    isbn = normalize_isbn(raw.strip()) if raw else None
+    if not isbn:
+        return None
+    if len(isbn) == 10:
+        return isbn if isbn_10_to_isbn_13(isbn) else None
+    if len(isbn) == 13 and isbn.isdigit() and check_digit_13(isbn[:-1]) == isbn[-1]:
+        return isbn
+    return None
+
+
+def _date_read(raw: str) -> str:
+    """YYYY-MM-DD or YYYY/MM/DD -> the YYYY/MM/DD form goodreads_import.js reads; else ''."""
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%Y/%m/%d")
+        except ValueError:
+            continue
+    return ""
+
+
+def process_isbn_list_csv(i):
+    """Read a plain list of ISBNs, one per line, or a CSV with an ``isbn`` column.
+
+    Optional CSV columns: ``title``, ``shelf`` (want-to-read, currently-reading, read),
+    ``rating`` (1-5) and ``date_read`` (YYYY-MM-DD). Rows come back in the same shape as
+    process_goodreads_csv(), so the import page and goodreads_import.js handle both.
+    Rows whose ISBN fails the check digit go to the second dict, keyed by row number.
+    """
+    payload = i.csv if isinstance(i.csv, (str, bytes)) else i.csv.value
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8")
+    payload = payload.lstrip("\ufeff")
+    rows = [row for row in csv.reader(payload.splitlines()) if any(cell.strip() for cell in row)]
+    header = [cell.strip().lower() for cell in rows[0]] if rows else []
+    if "isbn" in header:
+        records = [dict(zip(header, row)) for row in rows[1:]]
+    else:
+        records = [{"isbn": row[0]} for row in rows]
+
+    books = {}
+    books_wo_isbns = {}
+    for number, record in enumerate(records, start=1):
+        raw_isbn = (record.get("isbn") or "").strip()
+        shelf = (record.get("shelf") or "").strip().lower() or "want-to-read"
+        rating = (record.get("rating") or "").strip()
+        book = {
+            "ISBN": raw_isbn,
+            "Title": (record.get("title") or "").strip(),
+            "My Rating": rating if rating in {"1", "2", "3", "4", "5"} else "0",
+            "Exclusive Shelf": ISBN_LIST_SHELVES.get(shelf, shelf),
+            "Date Read": _date_read((record.get("date_read") or "").strip()),
+        }
+        if isbn := valid_isbn(raw_isbn):
+            book["ISBN"] = isbn
+            books[isbn] = book
+        else:
+            books_wo_isbns[f"row-{number}"] = book
     return books, books_wo_isbns
 
 
